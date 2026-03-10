@@ -27,6 +27,15 @@ go.work.sum
 # env file
 .env
 
+# SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+# Build output
+bin/
+
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/
+.claude/
