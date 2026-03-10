@@ -12,7 +12,7 @@ Análisis de riesgos de la implementación actual y hoja de ruta para llevar el 
    - [🟠 Validación de inputs insuficiente](#3-validación-de-inputs-insuficiente--alto)
    - [🟠 Rate limiter vulnerable a spoofing](#4-rate-limiter-vulnerable-a-x-forwarded-for-spoofing--alto)
    - [🟠 SQLite no apta para multi-instancia](#5-sqlite-no-apta-para-entornos-multi-instancia--alto-bloqueante-en-prod)
-   - [🟡 Logging sin estructura ni auditoría](#6-logging-sin-estructura-ni-auditoría--medio)
+   - [🟢 Logging estructurado](#6-logging-estructurado--resuelto)
    - [🟡 Configuración hardcodeada](#7-configuración-hardcodeada--medio)
    - [🟡 Health checks ausentes](#8-health-checks-ausentes--medio)
 2. [Pasos para producción en AWS](#pasos-para-producción-en-aws)
@@ -155,20 +155,72 @@ Migrar a **Amazon RDS for PostgreSQL** para producción:
 
 ---
 
-### 6. Logging sin estructura ni auditoría — 🟡 MEDIO
+### 6. Logging estructurado — 🟢 RESUELTO
 
-**Descripción**
-El servidor usa el logger estándar de Go (`log` package) y el middleware de Chi para logging de requests. No hay logs estructurados ni trazabilidad de operaciones sobre los adspots.
+**Implementación**
+Se reemplazó el `log` package estándar y el middleware de texto de Chi por un sistema de logging JSON completo basado en `log/slog` (stdlib, sin dependencias nuevas). Archivos introducidos:
 
-**Impacto**
-- Imposible correlacionar un request con sus errores internos en producción.
-- No hay audit trail: no se sabe quién creó o desactivó un adspot.
-- Los logs en texto plano son difíciles de consultar en CloudWatch Logs Insights.
+| Archivo | Rol |
+|---|---|
+| `internal/logger/logger.go` | Factory (`New`), helpers de contexto (`WithContext`, `FromContext`) |
+| `internal/middleware/logger.go` | Middleware HTTP — emite un evento JSON por request |
 
-**Recomendación**
-- Adoptar logging estructurado con `log/slog` (stdlib desde Go 1.21) o `go.uber.org/zap`.
-- Loguear en formato JSON: `{"time":"...","level":"INFO","request_id":"...","action":"deactivate","adspot_id":"...","actor":"..."}`.
-- Incluir el `request_id` (ya generado por `chiMiddleware.RequestID`) en todos los logs de negocio.
+El nivel de logging es configurable via variable de entorno `LOG_LEVEL` (`debug` / `info` / `warn` / `error`; default: `info`).
+
+**Schema de logs**
+
+Todos los eventos son una línea JSON en stdout. Campos por tipo:
+
+```jsonc
+// HTTP request (un evento por request)
+{
+  "time": "2026-03-10T14:00:00.200Z", "level": "INFO", "msg": "request",
+  "request_id": "abc-123", "method": "POST", "path": "/adspots",
+  "status": 201, "duration_ms": 12, "remote_ip": "10.0.0.5",
+  "user_agent": "curl/7.88", "bytes": 245
+}
+
+// Evento de negocio — mutación exitosa
+{
+  "time": "...", "level": "INFO", "msg": "adspot created",
+  "request_id": "abc-123", "adspot_id": "uuid", "placement": "home_screen"
+}
+
+// Error interno — emitido antes de responder 500
+{
+  "time": "...", "level": "ERROR", "msg": "create adspot failed",
+  "request_id": "abc-123", "error": "insert adspot: database is locked"
+}
+
+// Startup / shutdown
+{ "time": "...", "level": "INFO", "msg": "server listening", "addr": ":8080" }
+```
+
+**Queries de ejemplo**
+
+```bash
+# Todos los errores 5xx
+cat app.log | jq 'select(.status >= 500)'
+
+# Requests lentos (> 500 ms)
+cat app.log | jq 'select(.duration_ms > 500)'
+
+# Trazar un request completo por ID
+cat app.log | jq 'select(.request_id == "abc-123")'
+
+# Errores internos con su causa
+cat app.log | jq 'select(.level == "ERROR") | {request_id, msg, error}'
+```
+
+En **CloudWatch Logs Insights**:
+```
+fields @timestamp, request_id, status, duration_ms, path
+| filter status >= 500
+| sort @timestamp desc
+```
+
+**Pendiente**
+El audit trail de quién ejecutó cada acción (`actor`) solo será completo una vez que se implemente autenticación JWT (Riesgo #1). Con el `request_id` como correlación ya es posible asociar cada mutación a un request individual.
 
 ---
 

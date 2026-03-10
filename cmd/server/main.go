@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,28 +14,37 @@ import (
 
 	"github.com/adspot-backend/adspot-backend/internal/adspot"
 	"github.com/adspot-backend/adspot-backend/internal/database"
+	applogger "github.com/adspot-backend/adspot-backend/internal/logger"
 	"github.com/adspot-backend/adspot-backend/internal/middleware"
 )
 
 func main() {
+	// ── Logger ────────────────────────────────────────────────────────────────
+	// LOG_LEVEL accepts: debug | info | warn | error  (default: info)
+	l := applogger.New(os.Getenv("LOG_LEVEL"))
+	slog.SetDefault(l)
+
 	// ── Database ──────────────────────────────────────────────────────────────
 	db, err := database.Open("adspot.db")
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		slog.Error("open db", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	if err := database.Migrate(db, "migrations"); err != nil {
-		log.Fatalf("migrate: %v", err)
+		slog.Error("migrate", "error", err)
+		os.Exit(1)
 	}
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 
-	// Global middleware
+	// Global middleware (order matters: RequestID must run before Logger so the
+	// request ID is available when the Logger middleware builds its log line).
 	r.Use(chiMiddleware.RequestID)
 	r.Use(chiMiddleware.RealIP)
-	r.Use(chiMiddleware.Logger)
+	r.Use(middleware.Logger)      // structured JSON logger — replaces chiMiddleware.Logger
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Timeout(5 * time.Second))
 	r.Use(middleware.RateLimit(10))
@@ -59,9 +68,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("server listening on %s", addr)
+		slog.Info("server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			slog.Error("listen", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -70,12 +80,13 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("shutting down server...")
+	slog.Info("shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("server forced to shutdown: %v", err)
+		slog.Error("server forced to shutdown", "error", err)
+		os.Exit(1)
 	}
-	log.Println("server stopped")
+	slog.Info("server stopped")
 }

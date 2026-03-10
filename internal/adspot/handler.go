@@ -2,9 +2,12 @@ package adspot
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	applogger "github.com/adspot-backend/adspot-backend/internal/logger"
 )
 
 // Handler wires HTTP routes to the adspot repository.
@@ -29,6 +32,8 @@ func (h *Handler) Routes() chi.Router {
 
 // POST /adspots
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	log := applogger.FromContext(r.Context())
+
 	var req CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, "invalid request body", http.StatusBadRequest)
@@ -45,17 +50,26 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 
 	spot, err := h.repo.Create(r.Context(), req)
 	if err != nil {
+		log.Error("create adspot failed", slog.Any("error", err))
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	log.Info("adspot created",
+		slog.String("adspot_id", spot.ID),
+		slog.String("placement", spot.Placement),
+	)
 	writeJSON(w, spot, http.StatusCreated)
 }
 
 // GET /adspots/{id}
 func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
+	log := applogger.FromContext(r.Context())
 	id := chi.URLParam(r, "id")
+
 	spot, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
+		log.Error("get adspot failed", slog.String("adspot_id", id), slog.Any("error", err))
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -68,9 +82,12 @@ func (h *Handler) getByID(w http.ResponseWriter, r *http.Request) {
 
 // POST /adspots/{id}/deactivate
 func (h *Handler) deactivate(w http.ResponseWriter, r *http.Request) {
+	log := applogger.FromContext(r.Context())
 	id := chi.URLParam(r, "id")
+
 	spot, err := h.repo.Deactivate(r.Context(), id)
 	if err != nil {
+		log.Error("deactivate adspot failed", slog.String("adspot_id", id), slog.Any("error", err))
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -78,14 +95,19 @@ func (h *Handler) deactivate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "adspot not found", http.StatusNotFound)
 		return
 	}
+
+	log.Info("adspot deactivated", slog.String("adspot_id", spot.ID))
 	writeJSON(w, spot, http.StatusOK)
 }
 
 // GET /adspots?placement=...&status=active
 func (h *Handler) listEligible(w http.ResponseWriter, r *http.Request) {
+	log := applogger.FromContext(r.Context())
 	placement := r.URL.Query().Get("placement")
+
 	spots, err := h.repo.ListEligible(r.Context(), placement)
 	if err != nil {
+		log.Error("list eligible adspots failed", slog.Any("error", err))
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
