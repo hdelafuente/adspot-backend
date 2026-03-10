@@ -211,6 +211,12 @@ main branch
 
 ---
 
+## Riesgos y hoja de ruta a producción
+
+Ver [`POSTMORTEM.md`](./POSTMORTEM.md) para un análisis completo de los riesgos de la implementación actual (autenticación, validación de inputs, rate limiting, base de datos) y los pasos detallados para llevar el servicio a producción en AWS.
+
+---
+
 ## Dependencias
 
 | Paquete | Versión | Uso |
